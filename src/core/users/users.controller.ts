@@ -69,6 +69,25 @@ export class UsersController {
       throw new ForbiddenException('You can only update your own account');
     }
 
+    // check if the user to be updated exists
+    const userToUpdate = await this.usersService.findOneUserById(id);
+    if (!userToUpdate) {
+      throw new NotFoundException('User to update not found');
+    }
+
+    // check if the username already exists for another user
+    if (
+      updateUserDto.username &&
+      updateUserDto.username !== userToUpdate.username
+    ) {
+      const existingUser = await this.usersService.findOneUserByUsername(
+        updateUserDto.username,
+      );
+      if (existingUser) {
+        throw new ForbiddenException('Username already taken');
+      }
+    }
+
     return await this.usersService.updateUserById(id, updateUserDto);
   }
 }
