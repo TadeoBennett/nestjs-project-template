@@ -1,7 +1,11 @@
+import * as dotenv from 'dotenv';
+dotenv.config();
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
 import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
+
 // import { doubleCsrf } from 'csrf-csrf';
 // import * as session from 'express-session';
 
@@ -20,6 +24,7 @@ async function bootstrap() {
   //     cookie: { secure: process.env.NODE_ENV === 'production' },
   //   }),
   // );
+  app.use(cookieParser());
 
   // CORS
   const allowedOrigins = process.env.CORS_ORIGINS

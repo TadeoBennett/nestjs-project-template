@@ -12,13 +12,11 @@ import {
   UserLoginDetails,
 } from '../models/interfaces/User';
 import * as bcrypt from 'bcrypt';
-import * as dotenv from 'dotenv';
 import { JwtService } from '@nestjs/jwt';
 import { SessionService } from 'src/core/sessions/sessions.service';
 import { SessionDetails } from 'src/models/interfaces/Session';
 import type { Request } from 'express';
-
-dotenv.config();
+import { jwtConstants } from './jwt.constants';
 
 @Injectable()
 export class AuthService {
@@ -41,6 +39,7 @@ export class AuthService {
     if (!user) {
       throw new NotFoundException('A user with that username was not found.');
     }
+    console.log('User retrieved for signIn:', user);
     const match = await bcrypt.compare(incomingPassword, user.password);
     if (!match) {
       throw new UnauthorizedException(
@@ -54,11 +53,14 @@ export class AuthService {
       username: user.username,
       role: user.role,
     };
+    console.log('Generating tokens with payload:', payload);
     const accessToken = await this.jwtService.signAsync(payload, {
-      expiresIn: '10m',
+      expiresIn: jwtConstants.accessTtl,
+      secret: jwtConstants.secret,
     });
     const refreshToken = await this.jwtService.signAsync(payload, {
-      expiresIn: '30d',
+      expiresIn: jwtConstants.refreshTtl,
+      secret: jwtConstants.secret,
     });
 
     const sessionDetails: SessionDetails = {
@@ -71,13 +73,21 @@ export class AuthService {
       revoked: false,
     };
 
+    console.log('Creating session with details:', sessionDetails);
+
     try {
       await this.sessionService.createSession(sessionDetails);
     } catch (error) {
       console.log('Failed to create session');
-      throw new InternalServerErrorException(
-        `Failed to create session: ${error}`,
-      );
+      if (error instanceof Error) {
+        if (error.name === 'TokenExpiredError') {
+          throw new UnauthorizedException('Refresh token expired');
+        }
+        if (error.name === 'JsonWebTokenError') {
+          throw new UnauthorizedException('Invalid refresh token');
+        }
+      }
+      throw new InternalServerErrorException('Token verification failed');
     }
 
     const userDetails: UserDetails = {
@@ -97,8 +107,12 @@ export class AuthService {
 
   async refresh(refreshToken: string) {
     try {
-      const payload: AuthenticatedUser =
-        await this.jwtService.verifyAsync(refreshToken);
+      const payload: AuthenticatedUser = await this.jwtService.verifyAsync(
+        refreshToken,
+        {
+          secret: jwtConstants.secret,
+        },
+      );
       const session = await this.sessionService.findByRefreshToken(
         refreshToken,
         true,
@@ -115,16 +129,16 @@ export class AuthService {
       const expTime = Math.floor(session.expiresAt.getTime() / 1000);
       const remainingTtl = expTime - now;
 
-      const newAccessToken = await this.jwtService.signAsync(
-        { sub: payload.sub, username: payload.username, role: payload.role },
-        { expiresIn: '10m' },
-      );
-
-      // create new refresh token using the same remaining TTL as the existing session
-      const newRefreshToken = await this.jwtService.signAsync(
-        { sub: payload.sub, username: payload.username, role: payload.role },
-        { expiresIn: remainingTtl },
-      );
+      const [newAccessToken, newRefreshToken] = await Promise.all([
+        this.jwtService.signAsync(
+          { sub: payload.sub, username: payload.username, role: payload.role },
+          { expiresIn: '10m', secret: jwtConstants.secret },
+        ),
+        this.jwtService.signAsync(
+          { sub: payload.sub, username: payload.username, role: payload.role },
+          { expiresIn: remainingTtl, secret: jwtConstants.secret },
+        ),
+      ]);
 
       // update the refresh token in the database
       session.refreshToken = newRefreshToken;
@@ -134,7 +148,16 @@ export class AuthService {
       return { access_token: newAccessToken, refresh_token: newRefreshToken };
     } catch (error) {
       console.log('Error refreshing token:', error);
-      throw new InternalServerErrorException('Refresh token invalid/expired');
+      if (error instanceof Error) {
+        if (error.name === 'TokenExpiredError') {
+          throw new UnauthorizedException('Refresh token expired');
+        }
+        if (error.name === 'JsonWebTokenError') {
+          throw new UnauthorizedException('Invalid refresh token');
+        }
+      }
+
+      throw new InternalServerErrorException('Token verification failed');
     }
   }
 
@@ -154,9 +177,9 @@ export class AuthService {
   }
 
   async logout(userId: number, refreshToken: string) {
-    console.log(`Logging out user ID ${userId}`);
     const session = await this.sessionService.findByRefreshToken(refreshToken);
-    if (!session || session.userId !== userId) {
+    console.log('Session found for logout:', session);
+    if (!session || session.user.id !== userId) {
       throw new UnauthorizedException('Invalid token or user mismatch');
     }
     await this.sessionService.revokeSession(refreshToken);

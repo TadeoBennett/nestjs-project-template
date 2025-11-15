@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { UserSessions } from 'src/models/entities/userSessions.entity';
 import { SessionDetails } from 'src/models/interfaces/Session';
-import { Repository } from 'typeorm';
+import { Repository, UpdateResult } from 'typeorm';
 import { UnauthorizedException } from '@nestjs/common';
 
 @Injectable()
@@ -51,5 +51,17 @@ export class SessionService {
       { refreshToken: token },
       { revoked: true },
     );
+  }
+
+  async revokeAllUserSessions(userId: number): Promise<number> {
+    const result: UpdateResult = await this.sessionRepository.update(
+      { user: { id: userId } },
+      { revoked: true },
+    );
+
+    console.log(`User ${userId} revoked ${result.affected ?? 0} sessions`);
+
+    // 'affected' may be undefined if nothing was updated, so default to 0
+    return result.affected ?? 0;
   }
 }
